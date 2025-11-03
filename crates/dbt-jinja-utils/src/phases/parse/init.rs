@@ -109,6 +109,11 @@ pub fn initialize_parse_jinja_environment(
         ),
         ("database".to_string(), MinijinjaValue::from(database)),
         ("schema".to_string(), MinijinjaValue::from(schema)),
+        // During parse phase, selected_resources is empty (execute is False)
+        (
+            "selected_resources".to_string(),
+            MinijinjaValue::from(Vec::<String>::new()),
+        ),
     ]);
 
     let adapter_type = AdapterType::from_str(adapter_type).map_err(|_| {

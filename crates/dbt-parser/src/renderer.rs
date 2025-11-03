@@ -932,6 +932,7 @@ async fn process_model_chunk_for_unsafe_detection<T: InternalDbtNodeAttributes +
         &package_name,
         &Nodes::default(),
         runtime_config.clone(),
+        None, // During parsing, selected_resources is empty
     );
     silence_base_context(&mut render_base_context);
 

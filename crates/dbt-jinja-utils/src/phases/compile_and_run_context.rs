@@ -37,6 +37,7 @@ pub fn build_compile_and_run_base_context(
     package_name: &str,
     nodes: &Nodes,
     runtime_config: Arc<DbtRuntimeConfig>,
+    selected_resources: Option<Vec<String>>,
 ) -> BTreeMap<String, MinijinjaValue> {
     let mut ctx = BTreeMap::new();
     let config_macro = |_: &[MinijinjaValue]| -> Result<MinijinjaValue, MinijinjaError> {
@@ -99,6 +100,14 @@ pub fn build_compile_and_run_base_context(
     // This is used in macros to gate the sql execution (set to true only after parse stage)
     // for example dbt_macro_assets/dbt-adapters/macros/etc/statement.sql
     ctx.insert("execute".to_string(), MinijinjaValue::from(true));
+
+    // Add selected_resources variable
+    // In dbt Core, this is empty during parsing (execute=false) and populated during run
+    // It contains a list of unique_ids for selected nodes like ["model.my_project.model1", ...]
+    let selected_resources_value = selected_resources
+        .map(|resources| MinijinjaValue::from(resources))
+        .unwrap_or_else(|| MinijinjaValue::from(Vec::<String>::new()));
+    ctx.insert("selected_resources".to_string(), selected_resources_value);
 
     // Register builtins as a global
     ctx.insert(
