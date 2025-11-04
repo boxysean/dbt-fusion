@@ -765,3 +765,159 @@ impl Object for LazyFlatGraph {
         self.get_graph().as_object().unwrap().render(f)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use dbt_schemas::state::DummyNodeResolverTracker;
+
+    #[test]
+    fn test_selected_resources_empty_when_none() {
+        let node_resolver = Arc::new(DummyNodeResolverTracker);
+        let runtime_config = Arc::new(DbtRuntimeConfig::default());
+        let nodes = Nodes::default();
+
+        let context = build_compile_and_run_base_context(
+            node_resolver,
+            "test_project",
+            &nodes,
+            runtime_config,
+            None,
+        );
+
+        // Verify selected_resources exists and is empty
+        let selected_resources = context.get("selected_resources").unwrap();
+        assert!(selected_resources.is_true()); // Vec exists
+        assert_eq!(selected_resources.len(), Some(0)); // But is empty
+    }
+
+    #[test]
+    fn test_selected_resources_populated_with_nodes() {
+        let node_resolver = Arc::new(DummyNodeResolverTracker);
+        let runtime_config = Arc::new(DbtRuntimeConfig::default());
+        let nodes = Nodes::default();
+
+        let selected_nodes = vec![
+            "model.my_project.model1".to_string(),
+            "model.my_project.model2".to_string(),
+            "snapshot.my_project.my_snapshot".to_string(),
+        ];
+
+        let context = build_compile_and_run_base_context(
+            node_resolver,
+            "test_project",
+            &nodes,
+            runtime_config,
+            Some(selected_nodes.clone()),
+        );
+
+        // Verify selected_resources exists and contains the nodes
+        let selected_resources = context.get("selected_resources").unwrap();
+        assert_eq!(selected_resources.len(), Some(3));
+
+        // Verify each node is in the list
+        let resources_vec: Vec<String> = selected_resources
+            .try_iter()
+            .unwrap()
+            .map(|v| v.to_string())
+            .collect();
+        assert_eq!(resources_vec, selected_nodes);
+    }
+
+    #[test]
+    fn test_selected_resources_available_during_execution() {
+        let node_resolver = Arc::new(DummyNodeResolverTracker);
+        let runtime_config = Arc::new(DbtRuntimeConfig::default());
+        let nodes = Nodes::default();
+
+        let selected_nodes = vec!["model.my_project.customers".to_string()];
+
+        let context = build_compile_and_run_base_context(
+            node_resolver,
+            "test_project",
+            &nodes,
+            runtime_config,
+            Some(selected_nodes),
+        );
+
+        // Verify execute is true (we're in execution phase)
+        let execute = context.get("execute").unwrap();
+        assert_eq!(execute.as_bool(), Some(true));
+
+        // Verify selected_resources is available
+        let selected_resources = context.get("selected_resources").unwrap();
+        assert!(selected_resources.is_true());
+        assert_eq!(selected_resources.len(), Some(1));
+    }
+
+    #[test]
+    fn test_selected_resources_in_jinja_template() {
+        use crate::environment_builder::JinjaEnvBuilder;
+        use dbt_common::adapter::AdapterType;
+        use dbt_common::cancellation::never_cancels;
+        use dbt_fusion_adapter::ParseAdapter;
+        use dbt_fusion_adapter::sql_types::NaiveTypeOpsImpl;
+        use dbt_schemas::schemas::relations::DEFAULT_DBT_QUOTING;
+        use minijinja::context;
+
+        let node_resolver = Arc::new(DummyNodeResolverTracker);
+        let runtime_config = Arc::new(DbtRuntimeConfig::default());
+        let nodes = Nodes::default();
+
+        let selected_nodes = vec![
+            "model.my_project.model1".to_string(),
+            "model.my_project.model2".to_string(),
+            "snapshot.my_project.my_snapshot".to_string(),
+        ];
+
+        let context = build_compile_and_run_base_context(
+            node_resolver,
+            "test_project",
+            &nodes,
+            runtime_config,
+            Some(selected_nodes.clone()),
+        );
+
+        // Create a simple Jinja environment to test rendering
+        let adapter = ParseAdapter::new(
+            AdapterType::Postgres,
+            dbt_serde_yaml::Mapping::default(),
+            DEFAULT_DBT_QUOTING,
+            Box::new(NaiveTypeOpsImpl::new(AdapterType::Postgres)),
+            never_cancels(),
+            None,
+        );
+        let env = JinjaEnvBuilder::new()
+            .with_adapter(Arc::new(adapter) as Arc<dyn dbt_fusion_adapter::BaseAdapter>)
+            .with_root_package("test_project".to_string())
+            .with_globals(context)
+            .build();
+
+        // Test 1: Verify selected_resources is accessible in a template
+        let template = r#"
+{% if execute %}
+  {% for resource in selected_resources %}
+    {{ resource }}
+  {% endfor %}
+{% endif %}
+"#;
+        let result = env.render_str(template, context! {}, &[]).unwrap();
+        assert!(result.contains("model.my_project.model1"));
+        assert!(result.contains("model.my_project.model2"));
+        assert!(result.contains("snapshot.my_project.my_snapshot"));
+
+        // Test 2: Verify we can check the length
+        let template = r#"{{ selected_resources | length }}"#;
+        let result = env.render_str(template, context! {}, &[]).unwrap();
+        assert_eq!(result.trim(), "3");
+
+        // Test 3: Verify we can use it in a conditional
+        let template = r#"
+{% if "model.my_project.model1" in selected_resources %}
+  model1 is selected
+{% endif %}
+"#;
+        let result = env.render_str(template, context! {}, &[]).unwrap();
+        assert!(result.contains("model1 is selected"));
+    }
+}
